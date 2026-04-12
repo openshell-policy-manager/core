@@ -44,8 +44,7 @@ homebrew_casks:
     license: MIT
     binaries:
       - ospm
-    url:
-      template: https://github.com/openshell-policy-manager/ospm/releases/download/{{ .Tag }}/ospm_{{ .Version }}_{{ .Os }}_{{ .Arch }}.{{ .Ext }}
+    url: "https://github.com/openshell-policy-manager/core/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     caveats: |
       OpenShell Policy Manager
 
@@ -64,8 +63,7 @@ homebrew_casks:
     license: MIT
     binaries:
       - ospm
-    url:
-      template: https://github.com/openshell-policy-manager/core/releases/download/{{ .Tag }}/ospm_{{ .Version }}_{{ .Os }}_{{ .Arch }}.{{ .Ext }}
+    url: "https://github.com/openshell-policy-manager/core/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     caveats: |
       OpenShell Policy Manager (Alpha)
 

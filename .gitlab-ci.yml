@@ -1,0 +1,73 @@
+# GitLab CI/CD: Sync to GitHub
+# Files synced: only what's needed to build + release via Homebrew
+
+stages:
+  - deploy
+
+sync_to_github:
+  image: alpine/git:latest
+  stage: deploy
+  variables:
+    GIT_DEPTH: 0
+  only:
+    - main
+    - ci-cd-fix
+    - tags
+  when: manual
+  script:
+    - |
+      echo "=== Syncing to GitHub ==="
+      pwd
+      ls -la
+      echo "---"
+      
+      # Project checkout is in current directory
+      PROJECT_DIR=$(pwd)
+      echo "Project dir: $PROJECT_DIR"
+      echo "Checking cmd..."
+      ls -la $PROJECT_DIR/cmd/
+      echo "Checking internal..."
+      ls -la $PROJECT_DIR/internal/
+      echo "---"
+      
+      # Clone GitHub repo to temp
+      echo "Cloning GitHub core..."
+      git clone https://oauth2:$GORELEASER_TOKEN@github.com/openshell-policy-manager/core.git /tmp/ospm-github
+      cd /tmp/ospm-github
+      echo "Current dir after clone: $(pwd)"
+      
+      # Clean existing files
+      rm -rf go.mod go.sum cmd internal .goreleaser.yaml README.md LICENSE INSTALL.md .github 2>/dev/null || true
+      
+      # Copy from PROJECT_DIR
+      cp $PROJECT_DIR/go.mod .
+      cp $PROJECT_DIR/go.sum .
+      cp -r $PROJECT_DIR/cmd ./cmd
+      cp -r $PROJECT_DIR/internal ./internal
+      cp $PROJECT_DIR/.goreleaser.yaml .
+      cp $PROJECT_DIR/README.md .
+      cp $PROJECT_DIR/LICENSE .
+      cp $PROJECT_DIR/INSTALL.md .
+      
+      # Copy GitHub Actions workflow
+      if [ -d "$PROJECT_DIR/.github/workflows" ]; then
+        mkdir -p .github/workflows
+        cp $PROJECT_DIR/.github/workflows/* .github/workflows/
+      fi
+      
+      ls -la
+      
+      # Check changes
+      git status
+      
+      # Commit as NextGenThoKo
+      git add .
+      git config --local user.name "NextGenThoKo"
+      git config --local user.email "06-mausgrau.kraefte@icloud.com"
+      git commit -m "Sync: ${CI_COMMIT_TAG}" || echo "Nothing to sync - no changes"
+      
+      # Push to sync branch (PR workflow will merge)
+      git push origin main:sync-from-gitlab
+      
+      echo "=== Synced to GitHub (sync-from-gitlab branch) ==="
+      echo "Create PR manually or via GitHub Actions"
