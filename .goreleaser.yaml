@@ -45,7 +45,7 @@ homebrew_casks:
     binaries:
       - ospm
     url:
-      template: https://github.com/openshell-policy-manager/ospm/releases/download/{{ .Tag }}/ospm_{{ .Version }}_{{ .Os }}_{{ .Arch }}.{{ .Ext }}
+      template: https://github.com/openshell-policy-manager/core/releases/download/{{ .Tag }}/ospm_{{ .Version }}_{{ .Os }}_{{ .Arch }}.{{ .Ext }}
     caveats: |
       OpenShell Policy Manager
 
