@@ -1,0 +1,48 @@
+# Binaries
+bin/
+ospm
+ospm-*
+
+# Go
+*.test
+*.out
+vendor/
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config
+.ospm/
+*.yaml
+!internal/config/templates/*.yaml
+!.goreleaser.yaml
+
+# ── GSD baseline (auto-generated) ──
+.gsd
+.gsd-id
+*~
+*.code-workspace
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+*.log
+coverage/
+.cache/
+tmp/

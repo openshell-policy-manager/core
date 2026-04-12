@@ -1,0 +1,484 @@
+#!/bin/bash
+#
+# OS-Config Interactive - Template-basierter OpenShell Policy Generator
+#
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+CONFIG_DIR="$PROJECT_ROOT/.oshell-config"
+TEMPLATES_DIR="$CONFIG_DIR/templates"
+DEFAULTS_FILE="$CONFIG_DIR/defaults.yaml"
+POLICY_JSON="$CONFIG_DIR/policy.json"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+mask_token() {
+    local token=$1
+    if [ ${#token} -le 8 ]; then
+        echo "****"
+    else
+        echo "${token:0:4}...${token: -4}"
+    fi
+}
+
+get_sandboxes() {
+    if command -v openshell &> /dev/null; then
+        openshell sandbox list 2>/dev/null || echo "No sandboxes found"
+    else
+        echo "openshell not found in PATH"
+    fi
+}
+
+load_defaults() {
+    if [ -f "$DEFAULTS_FILE" ]; then
+        while IFS=': ' read -r key value; do
+            [ -z "$key" ] && continue
+            [[ "$key" =~ ^# ]] && continue
+            case "$key" in
+                sandbox) DEFAULT_SANDBOX="$value" ;;
+                gitlab_url) DEFAULT_GITLAB_URL="$value" ;;
+                allow_gitlab) DEFAULT_ALLOW_GITLAB="$value" ;;
+                allow_websearch) DEFAULT_ALLOW_WEBSEARCH="$value" ;;
+                allow_git_read) DEFAULT_ALLOW_GIT_READ="$value" ;;
+                allow_git_write) DEFAULT_ALLOW_GIT_WRITE="$value" ;;
+                allow_npm) DEFAULT_ALLOW_NPM="$value" ;;
+                allow_npx) DEFAULT_ALLOW_NPX="$value" ;;
+                allow_apt_update) DEFAULT_ALLOW_APT_UPDATE="$value" ;;
+                allow_apt_install) DEFAULT_ALLOW_APT_INSTALL="$value" ;;
+                token_configured) DEFAULT_TOKEN_CONFIGURED="$value" ;;
+            esac
+        done < "$DEFAULTS_FILE"
+    fi
+}
+
+list_templates() {
+    echo "Verfügbare Templates:"
+    echo ""
+    local count=1
+    for template in "$TEMPLATES_DIR"/*.yaml; do
+        if [ -f "$template" ]; then
+            local name=$(basename "$template" .yaml)
+            local desc=$(grep "^description:" "$template" | cut -d'"' -f2)
+            echo "  [$count] $name"
+            echo "      $desc"
+            ((count++))
+        fi
+    done
+    echo "  [c] Custom - Eigenes Template erstellen"
+    echo ""
+}
+
+select_template() {
+    list_templates
+    
+    while true; do
+        read -p "  Template wählen [$DEFAULT_TEMPLATE]: " TEMPLATE_SELECTION
+        TEMPLATE_SELECTION=${TEMPLATE_SELECTION:-$DEFAULT_TEMPLATE}
+        
+        case "$TEMPLATE_SELECTION" in
+            1) SELECTED_TEMPLATE="minimal"; break ;;
+            2) SELECTED_TEMPLATE="dev"; break ;;
+            3) SELECTED_TEMPLATE="full"; break ;;
+            c|C) SELECTED_TEMPLATE="custom"; break ;;
+            minimal) SELECTED_TEMPLATE="minimal"; break ;;
+            dev) SELECTED_TEMPLATE="dev"; break ;;
+            full) SELECTED_TEMPLATE="full"; break ;;
+            *) echo -e "  ${RED}✗ Ungültige Auswahl${NC}" ;;
+        esac
+    done
+    
+    echo -e "  → ${GREEN}$SELECTED_TEMPLATE${NC}"
+}
+
+prompt_yesno() {
+    local prompt="$1"
+    local default="$2"
+    local var_name="$3"
+    
+    local default_display="[y/n]"
+    if [ "$default" = "true" ] || [ "$default" = "y" ]; then
+        default_display="[y]"
+    elif [ "$default" = "false" ] || [ "$default" = "n" ]; then
+        default_display="[n]"
+    fi
+    
+    while true; do
+        read -p "  $prompt $default_display: " value
+        value=${value:-$default}
+        
+        case "$value" in
+            y|Y|true|yes|j|J) eval "$var_name=true"; break ;;
+            n|N|false|no|n) eval "$var_name=false"; break ;;
+            *) echo -e "  ${RED}✗ Bitte y oder n eingeben${NC}" ;;
+        esac
+    done
+}
+
+prompt_text() {
+    local prompt="$1"
+    local default="$2"
+    local var_name="$3"
+    
+    if [ -n "$default" ]; then
+        read -p "  $prompt [$default]: " value
+        value=${value:-$default}
+    else
+        read -p "  $prompt: " value
+    fi
+    
+    eval "$var_name=\$value"
+}
+
+prompt_token() {
+    local var_name="$1"
+    local existing="$2"
+    
+    while true; do
+        if [ "$existing" = "true" ]; then
+            echo -e "  ${YELLOW}⚹ Token bereits konfiguriert${NC}"
+            read -p "  Neues Token eingeben oder Enter für behalten: " value
+        else
+            read -p "  Token eingeben (glpat-...): " value
+        fi
+        
+        if [ -z "$value" ]; then
+            if [ "$existing" = "true" ]; then
+                echo -e "  ${GREEN}✓ Token behalten${NC}"
+                eval "$var_name="
+                TOKEN_CONFIGURED="true"
+            else
+                echo -e "  ${YELLOW}⚠ Token übersprungen${NC}"
+                eval "$var_name="
+                TOKEN_CONFIGURED="false"
+            fi
+            break
+        fi
+        
+        if [[ "$value" == glpat-* ]]; then
+            MASKED=$(mask_token "$value")
+            echo -e "  → Token: ${GREEN}$MASKED${NC}"
+            eval "$var_name=\$value"
+            TOKEN_CONFIGURED="true"
+            
+            mkdir -p "$HOME/.config/opencode/credentials"
+            echo "$value" > "$HOME/.config/opencode/credentials/gitlab-deploy-token"
+            chmod 600 "$HOME/.config/opencode/credentials/gitlab-deploy-token"
+            echo -e "  ${GREEN}✓ Token gespeichert${NC}"
+            break
+        fi
+        
+        echo -e "  ${RED}✗ Token muss mit 'glpat-' beginnen${NC}"
+    done
+}
+
+save_defaults() {
+    cat > "$DEFAULTS_FILE" << EOF
+# OpenShell Default-Konfiguration
+# Wird beim Wizard-Start geladen und als Vorschläge angezeigt
+
+# Sandbox-Name
+sandbox: "$SANDBOX_NAME"
+
+# Template
+template: "$SELECTED_TEMPLATE"
+
+# GitLab-Konfiguration
+gitlab_url: "$GITLAB_URL"
+
+# Feature-Permissions
+allow_gitlab: "$ALLOW_GITLAB"
+allow_websearch: "$ALLOW_WEBSEARCH"
+allow_git_read: "$ALLOW_GIT_READ"
+allow_git_write: "$ALLOW_GIT_WRITE"
+allow_npm: "$ALLOW_NPM"
+allow_npx: "$ALLOW_NPX"
+allow_apt_update: "$ALLOW_APT_UPDATE"
+allow_apt_install: "$ALLOW_APT_INSTALL"
+
+# Token-Status
+token_configured: $TOKEN_CONFIGURED
+EOF
+}
+
+generate_policy() {
+    local policy_file="$1"
+    
+    python3 - "$SANDBOX_NAME" "$GITLAB_URL" "$ALLOW_GITLAB" "$ALLOW_WEBSEARCH" \
+        "$ALLOW_GIT_READ" "$ALLOW_GIT_WRITE" \
+        "$ALLOW_NPM" "$ALLOW_NPX" \
+        "$ALLOW_APT_UPDATE" "$ALLOW_APT_INSTALL" \
+        "$policy_file" << 'PYEOF'
+import sys
+import yaml
+
+sandbox_name = sys.argv[1]
+gitlab_url = sys.argv[2]
+allow_gitlab = sys.argv[3] == "true"
+allow_websearch = sys.argv[4] == "true"
+allow_git_read = sys.argv[5] == "true"
+allow_git_write = sys.argv[6] == "true"
+allow_npm = sys.argv[7] == "true"
+allow_npx = sys.argv[8] == "true"
+allow_apt_update = sys.argv[9] == "true"
+allow_apt_install = sys.argv[10] == "true"
+policy_file = sys.argv[11]
+
+network_policies = {}
+read_write_paths = ["/sandbox", "/tmp", "/dev/null"]
+binaries = []
+
+# GitLab: git clone/pull (read)
+if allow_gitlab and allow_git_read:
+    network_policies["git_clone_pull"] = {
+        "name": "Git Clone/Pull",
+        "description": "Git-Lesen: clone, fetch, pull",
+        "endpoints": [{"host": gitlab_url, "port": 443, "tls": "skip"}],
+        "binaries": [{"path": "/usr/bin/git"}]
+    }
+    binaries.append({"path": "/usr/bin/git"})
+
+# GitLab: git push (write)
+if allow_gitlab and allow_git_write:
+    network_policies["git_push_commit"] = {
+        "name": "Git Push/Commit",
+        "description": "Git-Schreiben: push, commit",
+        "endpoints": [{"host": gitlab_url, "port": 443, "tls": "skip"}],
+        "binaries": [{"path": "/usr/bin/git"}]
+    }
+
+# Web Search
+if allow_websearch:
+    network_policies["exa_ai"] = {
+        "name": "Exa AI Search",
+        "endpoints": [{"host": "api.exa.ai", "port": 443, "tls": "skip"}],
+        "binaries": [{"path": "/usr/bin/curl"}]
+    }
+
+# npm install (packages only)
+if allow_npm:
+    network_policies["npm_registry"] = {
+        "name": "npm Registry (install)",
+        "description": "npm install - Pakete von registry.npmjs.org",
+        "endpoints": [
+            {"host": "registry.npmjs.org", "port": 443, "tls": "skip"},
+            {"host": "api.npmjs.org", "port": 443, "tls": "skip"}
+        ],
+        "binaries": [
+            {"path": "/usr/bin/npm"},
+            {"path": "/usr/bin/node"}
+        ]
+    }
+    binaries.extend([
+        {"path": "/usr/bin/npm"},
+        {"path": "/usr/bin/node"}
+    ])
+
+# npx execute (run packages)
+if allow_npx:
+    if "npm_registry" not in network_policies:
+        network_policies["npm_registry"] = {
+            "name": "npm Registry",
+            "description": "npm/npx Registry-Zugriff",
+            "endpoints": [
+                {"host": "registry.npmjs.org", "port": 443, "tls": "skip"},
+                {"host": "api.npmjs.org", "port": 443, "tls": "skip"}
+            ],
+            "binaries": []
+        }
+    if "/usr/bin/npx" not in [b["path"] for b in network_policies["npm_registry"]["binaries"]]:
+        network_policies["npm_registry"]["binaries"].append({"path": "/usr/bin/npx"})
+    if {"path": "/usr/bin/npx"} not in binaries:
+        binaries.append({"path": "/usr/bin/npx"})
+
+# APT update (package lists)
+if allow_apt_update:
+    read_write_paths.extend([
+        "/var/lib/apt/lists"
+    ])
+
+# APT install (packages + cache)
+if allow_apt_install:
+    read_write_paths.extend([
+        "/var/lib/apt",
+        "/var/cache/apt"
+    ])
+    binaries.extend([
+        {"path": "/usr/bin/apt"},
+        {"path": "/usr/bin/apt-get"}
+    ])
+
+policy = {
+    "version": 1,
+    "filesystem_policy": {
+        "include_workdir": True,
+        "read_only": ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log", "/etc/ssl", "/etc/ca-certificates"],
+        "read_write": read_write_paths
+    },
+    "landlock": {"compatibility": "best_effort"},
+    "process": {"run_as_user": "sandbox", "run_as_group": "sandbox"},
+    "network_policies": network_policies
+}
+
+if binaries:
+    policy["binaries"] = binaries
+
+with open(policy_file, "w") as f:
+    f.write("# OpenShell Policy - Generated by OS-Config\n")
+    f.write(f"# Sandbox: {sandbox_name}\n")
+    f.write("---\n")
+    yaml.dump(policy, f, default_flow_style=False, sort_keys=False)
+
+print("Policy created")
+PYEOF
+}
+
+echo ""
+echo -e "${BLUE}╔═══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║         OpenShell Policy Generator (Template Mode)        ║${NC}"
+echo -e "${BLUE}╚═══════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+echo -e "${YELLOW}Lade Konfiguration...${NC}"
+load_defaults
+echo -e "${GREEN}✓ Konfiguration geladen${NC}"
+echo ""
+
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Schritt 0: Template auswählen${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+if [ -n "$DEFAULT_TEMPLATE" ]; then
+    SELECTED_TEMPLATE="$DEFAULT_TEMPLATE"
+fi
+
+select_template
+echo ""
+
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Schritt 1: Sandbox${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+echo "Vorhandene Sandboxes:"
+echo ""
+get_sandboxes
+echo ""
+
+prompt_text "Sandbox-Name" "$DEFAULT_SANDBOX" "SANDBOX_NAME"
+while [ -z "$SANDBOX_NAME" ]; do
+    echo -e "  ${RED}✗ Bitte einen Namen eingeben${NC}"
+    read -p "  Sandbox-Name: " SANDBOX_NAME
+done
+echo "  → $SANDBOX_NAME"
+echo ""
+
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Schritt 2: GitLab${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+prompt_text "GitLab URL" "$DEFAULT_GITLAB_URL" "GITLAB_URL"
+GITLAB_URL=${GITLAB_URL:-gitlab.com}
+echo "  → $GITLAB_URL"
+echo ""
+
+prompt_token "GITLAB_TOKEN" "$DEFAULT_TOKEN_CONFIGURED"
+echo ""
+
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Schritt 3: Features (basierend auf Template: $SELECTED_TEMPLATE)${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+ALLOW_GITLAB=true
+echo -e "  ${GREEN}✓${NC} GitLab API (implizit durch Token)"
+echo ""
+
+prompt_yesno "Web-Recherche erlauben?" "$DEFAULT_ALLOW_WEBSEARCH" "ALLOW_WEBSEARCH"
+echo "  → $ALLOW_WEBSEARCH"
+
+echo ""
+echo -e "${YELLOW}  npm/Node.js Optionen:${NC}"
+echo ""
+prompt_yesno "  npm install erlauben? (Pakete von registry.npmjs.org)" "$DEFAULT_ALLOW_NPM" "ALLOW_NPM"
+echo "    → npm install: $ALLOW_NPM"
+
+prompt_yesno "  npx execute erlauben? (npx + node Binary)" "$DEFAULT_ALLOW_NPX" "ALLOW_NPX"
+echo "    → npx execute: $ALLOW_NPX"
+
+echo ""
+echo -e "${YELLOW}  APT-Paketmanager Optionen:${NC}"
+echo ""
+prompt_yesno "  apt-get update erlauben? (/var/lib/apt/lists)" "$DEFAULT_ALLOW_APT_UPDATE" "ALLOW_APT_UPDATE"
+echo "    → apt-get update: $ALLOW_APT_UPDATE"
+
+prompt_yesno "  apt-get install erlauben? (/var/lib/apt, /var/cache/apt)" "$DEFAULT_ALLOW_APT_INSTALL" "ALLOW_APT_INSTALL"
+echo "    → apt-get install: $ALLOW_APT_INSTALL"
+
+prompt_yesno "Git-Lesen (clone, pull)?" "$DEFAULT_ALLOW_GIT_READ" "ALLOW_GIT_READ"
+echo "  → $ALLOW_GIT_READ"
+
+prompt_yesno "Git-Schreiben (push, commit)?" "$DEFAULT_ALLOW_GIT_WRITE" "ALLOW_GIT_WRITE"
+echo "  → $ALLOW_GIT_WRITE"
+
+echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Speichere Defaults...${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+mkdir -p "$CONFIG_DIR"
+save_defaults
+echo -e "${GREEN}✓ Defaults gespeichert${NC}"
+echo ""
+
+echo -e "${BLUE}╔═══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║         Policy wird erstellt...                          ║${NC}"
+echo -e "${BLUE}╚═══════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+POLICY_FILE="$CONFIG_DIR/${SANDBOX_NAME}-policy.yaml"
+generate_policy "$POLICY_FILE"
+
+cat > "$POLICY_JSON" << EOF
+{
+  "sandbox": "$SANDBOX_NAME",
+  "template": "$SELECTED_TEMPLATE",
+  "gitlab_url": "$GITLAB_URL",
+  "gitlab_token_configured": $TOKEN_CONFIGURED,
+  "allow_gitlab": $([ "$ALLOW_GITLAB" = "true" ] && echo "true" || echo "false"),
+  "allow_websearch": $([ "$ALLOW_WEBSEARCH" = "true" ] && echo "true" || echo "false"),
+  "allow_git_read": $([ "$ALLOW_GIT_READ" = "true" ] && echo "true" || echo "false"),
+  "allow_git_write": $([ "$ALLOW_GIT_WRITE" = "true" ] && echo "true" || echo "false"),
+  "allow_npm": $([ "$ALLOW_NPM" = "true" ] && echo "true" || echo "false"),
+  "allow_npx": $([ "$ALLOW_NPX" = "true" ] && echo "true" || echo "false"),
+  "allow_apt_update": $([ "$ALLOW_APT_UPDATE" = "true" ] && echo "true" || echo "false"),
+  "allow_apt_install": $([ "$ALLOW_APT_INSTALL" = "true" ] && echo "true" || echo "false")
+}
+EOF
+
+echo -e "${GREEN}✓ OpenShell Policy erstellt${NC}"
+echo ""
+
+echo -e "${BLUE}╔═══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║         Policy anwenden                                  ║${NC}"
+echo -e "${BLUE}╚═══════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+ABS_POLICY_FILE="$PROJECT_ROOT/.oshell-config/${SANDBOX_NAME}-policy.yaml"
+
+echo -e "${CYAN}Befehl:${NC}"
+echo ""
+echo "  openshell policy set $SANDBOX_NAME --policy $ABS_POLICY_FILE --wait"
+echo ""
+
+read -p "  Policy jetzt anwenden? (y/n): " APPLY_NOW
+if [ "$APPLY_NOW" = "y" ]; then
+    openshell policy set "$SANDBOX_NAME" --policy "$ABS_POLICY_FILE" --wait
+fi
