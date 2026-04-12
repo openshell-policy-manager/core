@@ -1,0 +1,87 @@
+version: 2
+
+project_name: ospm
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: ospm
+    dir: .
+    main: ./cmd/ospm
+    binary: ospm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+
+homebrew_casks:
+  - name: ospm
+    repository:
+      owner: openshell-policy-manager
+      name: homebrew-ospm
+    directory: Casks
+    homepage: https://github.com/openshell-policy-manager/core
+    description: OpenShell Policy Manager
+    license: MIT
+    binaries:
+      - ospm
+    url:
+      template: https://github.com/openshell-policy-manager/ospm/releases/download/{{ .Tag }}/ospm_{{ .Version }}_{{ .Os }}_{{ .Arch }}.{{ .Ext }}
+    caveats: |
+      OpenShell Policy Manager
+
+      Usage:
+        ospm init
+        ospm wizard
+        ospm generate
+
+  - name: ospm-alpha
+    repository:
+      owner: openshell-policy-manager
+      name: homebrew-ospm-alpha
+    directory: Casks
+    homepage: https://github.com/openshell-policy-manager/core
+    description: OpenShell Policy Manager (Alpha)
+    license: MIT
+    binaries:
+      - ospm
+    url:
+      template: https://github.com/openshell-policy-manager/core/releases/download/{{ .Tag }}/ospm_{{ .Version }}_{{ .Os }}_{{ .Arch }}.{{ .Ext }}
+    caveats: |
+      OpenShell Policy Manager (Alpha)
+
+      Usage:
+        ospm init
+        ospm wizard
+        ospm generate
+
+nfpms:
+  - id: ospm
+    formats:
+      - deb
+    vendor: OpenShell Policy Manager
+    homepage: https://github.com/openshell-policy-manager/core
+    maintainer: OpenShell Policy Manager <dev@openshell.io>
+    description: OpenShell Policy Manager
+    license: MIT
+    dependencies:
+      - openshell
