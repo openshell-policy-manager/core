@@ -28,7 +28,7 @@ Policies are YAML-based and control filesystem access, network endpoints, and pr
 
 ## Installation
 
-[INSTALL.md](docs/user/INSTALL.md)
+[INSTALL.md](INSTALL.md)
 
 ### Stable Release
 ```bash
