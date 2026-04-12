@@ -28,6 +28,8 @@ Policies are YAML-based and control filesystem access, network endpoints, and pr
 
 ## Installation
 
+[INSTALL.md](docs/user/INSTALL.md)
+
 ### Stable Release
 ```bash
 brew install openshell-policy-manager/ospm/ospm
